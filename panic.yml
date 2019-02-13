@@ -1,0 +1,50 @@
+---
+- name: Test VM Failover in RHV
+  hosts: localhost
+  tasks:
+    - name: Create Random Custom Event ID
+      shell: tr -d -c "0-9" < /dev/urandom | head -c 8
+      register: event_id
+
+    - set_fact:
+        payload: >
+          <event>
+            <description>Forcing Kernel Panic of {{ rhv_host }}</description>
+            <severity>normal</severity>
+            <origin>Ansible HA Test</origin>
+            <custom_id>{{ event_id.stdout }}</custom_id>
+          </event>
+
+    - name: Write Event Log
+      uri:
+        url: "https://{{ rhv_manager }}/ovirt-engine/api/events"
+        user: "{{ rhv_manager_username }}"
+        password: "{{ rhv_manager_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        method: POST
+        body: "{{ payload }}"
+        headers: 
+          Content-Type: "application/xml"
+        status_code: 201
+
+    - name: Sync Disks
+      become: yes
+      shell: "sync"
+      delegate_to: "{{ rhv_host }}"
+
+    - name: Force Kernel Panic
+      become: yes
+      shell: "sleep 2 && echo c >/proc/sysrq-trigger"
+      delegate_to: "{{ rhv_host }}"
+      async: 1
+      poll: 0
+
+    - name: Wait for 2 seconds
+      pause:
+        seconds: 2
+
+    - name: Wait for HA VM
+      wait_for:
+        port: "{{ vm_test_port }}"
+        host: "{{ rhv_havm }}"
